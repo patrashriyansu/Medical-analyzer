@@ -21,9 +21,11 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 function App() {
   const isCapacitorApp = !!window?.Capacitor;
-  const API_BASE = localStorage.getItem("backend_url")
-    || process.env.REACT_APP_API_BASE_URL
-    || (isCapacitorApp ? "http://10.160.32.120:8000" : "http://127.0.0.1:8000");
+  const isLocalWeb = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  const publicApiBase = "https://medical-analyzer-xrjb.onrender.com";
+  const API_BASE = process.env.REACT_APP_API_BASE_URL
+    || (isLocalWeb ? localStorage.getItem("backend_url") : null)
+    || (isCapacitorApp ? "http://10.0.2.2:8000" : (isLocalWeb ? "http://127.0.0.1:8000" : publicApiBase));
   const [user, setUser] = useState(null);
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);

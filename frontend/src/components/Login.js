@@ -3,7 +3,11 @@ import "./Auth.css";
 
 function Login({ onLoginSuccess }) {
   const isCapacitorApp = !!window?.Capacitor;
-  const defaultApiBase = process.env.REACT_APP_API_BASE_URL || (isCapacitorApp ? "http://10.0.2.2:8000" : "http://127.0.0.1:8000");
+  const isLocalWeb = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  const publicApiBase = "https://medical-analyzer-xrjb.onrender.com";
+  const defaultApiBase = process.env.REACT_APP_API_BASE_URL
+    || (isLocalWeb ? localStorage.getItem("backend_url") : null)
+    || (isCapacitorApp ? "http://10.0.2.2:8000" : (isLocalWeb ? "http://127.0.0.1:8000" : publicApiBase));
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,13 +23,12 @@ function Login({ onLoginSuccess }) {
 
     if (isCapacitorApp) {
       list.push("http://10.0.2.2:8000");
-      list.push("http://10.160.32.120:8000");
-    } else {
+    } else if (isLocalWeb) {
       list.push("http://127.0.0.1:8000", "http://localhost:8000");
     }
 
     return [...new Set(list.filter(Boolean))];
-  }, [defaultApiBase, isCapacitorApp]);
+  }, [defaultApiBase, isCapacitorApp, isLocalWeb]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -67,7 +70,7 @@ function Login({ onLoginSuccess }) {
         throw new Error(
           isCapacitorApp
             ? "Cannot connect to backend. Make sure backend runs with --host 0.0.0.0 and phone and PC are on same Wi-Fi."
-            : "Cannot connect to backend. Start backend on port 8000 and keep it running."
+            : "Cannot connect to backend. Check deployed backend URL/environment settings."
         );
       }
 
