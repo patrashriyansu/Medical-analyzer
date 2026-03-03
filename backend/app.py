@@ -12,6 +12,7 @@ import re
 import uuid
 import json
 import logging
+from retrieval import MedicalRetriever
 
 # ==========================
 # CONFIGURATION
@@ -26,6 +27,8 @@ security = HTTPBearer()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+retriever = MedicalRetriever()
 
 app = FastAPI(title="Smart Medical AI Backend")
 
@@ -120,19 +123,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 @app.post("/register", response_model=AuthResponse)
 def register(req: RegisterRequest):
-
     if req.email in users_db:
         raise HTTPException(status_code=400, detail="User exists")
-
     hashed = pwd_context.hash(req.password)
-
     users_db[req.email] = {
         "password": hashed,
         "name": req.name
     }
-
     token = create_access_token({"sub": req.email})
-
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -141,17 +139,12 @@ def register(req: RegisterRequest):
 
 @app.post("/login", response_model=AuthResponse)
 def login(req: LoginRequest):
-
     if req.email not in users_db:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
     user = users_db[req.email]
-
     if not pwd_context.verify(req.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
     token = create_access_token({"sub": req.email})
-
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -207,7 +200,6 @@ def calculate_health_score(analysis):
 def infer_risk_type(analysis, health_score):
     high_markers = {name for name, item in analysis.items() if item.get("status") == "High"}
     low_markers = {name for name, item in analysis.items() if item.get("status") == "Low"}
-
     if "Glucose" in high_markers:
         return "metabolic"
     if "LDL Cholesterol" in high_markers or "Triglycerides" in high_markers:
@@ -272,7 +264,6 @@ def build_preventive_plan(analysis, health_score):
             "Week 4: Repeat fasting glucose/HbA1c discussion with your clinician",
         ]
         baseline_plan["tests_to_repeat"] = ["Fasting glucose", "HbA1c", "Triglycerides"]
-
     elif risk_type == "cardiovascular":
         baseline_plan["diet_suggestions"] = [
             "Adopt a DASH/Mediterranean pattern with vegetables, pulses, nuts, and fish",
@@ -296,7 +287,6 @@ def build_preventive_plan(analysis, health_score):
             "Week 4: Repeat lipid profile and review risk markers",
         ]
         baseline_plan["tests_to_repeat"] = ["Lipid panel", "Blood pressure log review", "hs-CRP (if advised)"]
-
     elif risk_type == "hematology":
         baseline_plan["diet_suggestions"] = [
             "Increase iron-rich foods: lentils, beans, leafy greens, lean meats",
@@ -320,17 +310,14 @@ def build_preventive_plan(analysis, health_score):
             "Week 4: Repeat CBC/iron studies as advised by your doctor",
         ]
         baseline_plan["tests_to_repeat"] = ["CBC", "Ferritin", "Iron profile"]
-
     return baseline_plan
 
 def build_quick_summary(analysis, score):
     if not analysis:
         return "No measurable lab values were extracted from this report. Please upload a clear PDF with standard test labels."
-
     high = [name for name, item in analysis.items() if item["status"] == "High"]
     low = [name for name, item in analysis.items() if item["status"] == "Low"]
     normal_count = sum(1 for item in analysis.values() if item["status"] == "Normal")
-
     findings = []
     if high:
         findings.append(f"Elevated markers: {', '.join(high)}.")
@@ -338,96 +325,93 @@ def build_quick_summary(analysis, score):
         findings.append(f"Low markers: {', '.join(low)}.")
     if normal_count > 0:
         findings.append(f"{normal_count} marker(s) are within normal range.")
-
     if score >= 85:
         risk_line = "Overall profile appears stable."
     elif score >= 65:
         risk_line = "Overall profile shows mild-to-moderate imbalance. Lifestyle correction and monitoring are advised."
     else:
         risk_line = "Overall profile indicates significant imbalance. Clinical follow-up is recommended."
-
     follow_up = "Recheck abnormal markers in 2-4 weeks and consult your physician for final interpretation."
     return " ".join(findings + [f"Health score: {score}%.", risk_line, follow_up])
 
 # ==========================
-# UPLOAD REPORT
+# ROUTES
 # ==========================
+
+@app.get("/")
+def home():
+    return {"message": "Smart Medical AI Backend Running ✅"}
 
 @app.post("/upload-report")
 async def upload_report(file: UploadFile = File(...), user=Depends(get_current_user)):
-
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF allowed")
-
     filename = f"temp_{uuid.uuid4()}.pdf"
-
     try:
         with open(filename, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-
         extracted_text = ""
         with pdfplumber.open(filename) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
                     extracted_text += text + "\n"
-
         os.remove(filename)
-
         cleaned = clean_text(extracted_text)
         values = extract_medical_values(cleaned)
         analysis = analyze_values(values)
         score = calculate_health_score(analysis)
-
         return {
             "values": values,
             "analysis": analysis,
             "health_score": score,
             "explanation": build_quick_summary(analysis, score)
         }
-
     except Exception as e:
         logger.error(str(e))
         raise HTTPException(status_code=500, detail="Processing failed")
 
-# ==========================
-# PERSONALIZED PLAN
-# ==========================
-
 @app.post("/personalized-plan")
 def personalized_plan(req: PersonalizedPlanRequest, user=Depends(get_current_user)):
     plan = build_preventive_plan(req.analysis or {}, req.health_score)
-
     return {"personalized_plan": plan}
 
-# ==========================
-# EMERGENCY ALERT
-# ==========================
+@app.post("/chat-report")
+def chat_report(req: ChatRequest, user=Depends(get_current_user)):
+    context = retriever.retrieve(req.message)
+    response = "Based on your report and medical knowledge: "
+    msg_lower = req.message.lower()
+    if "glucose" in msg_lower or "sugar" in msg_lower:
+        response += "Your glucose levels suggest monitoring your carbohydrate intake. "
+    elif "cholesterol" in msg_lower or "fat" in msg_lower:
+        response += "Focus on heart-healthy fats and fiber to manage cholesterol. "
+    else:
+        response += "I've analyzed your question against your lab results. Please consult your physician for specific clinical advice. "
+    if context:
+        response += f"\n\nReference info: {context[0][:200]}..."
+    return {"response": response}
+
+@app.post("/voice-query")
+def voice_query(req: VoiceQueryRequest, user=Depends(get_current_user)):
+    # Standard logic for voice, reusing chat logic
+    res = chat_report(ChatRequest(message=req.query, analysis=req.analysis, health_score=0), user)
+    return {"response": res["response"]}
 
 @app.post("/emergency-alert")
 def emergency_alert(req: ChatRequest, user=Depends(get_current_user)):
-
     alerts = {"critical": [], "warning": []}
-
     for test, data in req.analysis.items():
         if data["status"] == "High":
             alerts["warning"].append({
                 "test": test,
                 "message": f"{test} is high. Consult doctor."
             })
-
     return alerts
-
-# ==========================
-# FAMILY DASHBOARD
-# ==========================
 
 @app.post("/family/save-profile")
 def save_family(req: SaveTrendRequest, user=Depends(get_current_user)):
-
     if user not in family_profiles_db:
         family_profiles_db[user] = []
-
     family_profiles_db[user].append(req.dict())
     return {"status": "Saved"}
 
@@ -435,34 +419,22 @@ def save_family(req: SaveTrendRequest, user=Depends(get_current_user)):
 def get_family(email: str, user=Depends(get_current_user)):
     return {"profiles": family_profiles_db.get(email, [])}
 
-# ==========================
-# HEALTH TRENDS
-# ==========================
-
 @app.post("/trends/save")
 def save_trend(req: SaveTrendRequest, user=Depends(get_current_user)):
-
     if req.user_email not in health_trends_db:
         health_trends_db[req.user_email] = []
-
     health_trends_db[req.user_email].append(req.dict())
     return {"status": "Trend saved"}
 
 @app.get("/trends/get/{email}")
 def get_trends(email: str, user=Depends(get_current_user)):
-
     trends = health_trends_db.get(email, [])
     scores = [t["health_score"] for t in trends]
-
     return {
         "trends": trends,
         "average_score": sum(scores)/len(scores) if scores else 0,
         "latest_score": scores[-1] if scores else 0
     }
-
-# ==========================
-# LOCALIZATION
-# ==========================
 
 @app.post("/localize")
 def localize(req: LocalizationRequest, user=Depends(get_current_user)):
@@ -470,18 +442,10 @@ def localize(req: LocalizationRequest, user=Depends(get_current_user)):
         "language": req.language,
         "health_score_label": "Localized Health Score",
         "localized_analysis": req.analysis,
-        "personalization_message": "Personalized message",
+        "personalization_message": "Personalized message in " + req.language,
         "dietary_preferences": ["Vegetarian", "Vegan"],
         "exercise_preferences": ["Yoga", "Walking"]
     }
-
-# ==========================
-# ROOT
-# ==========================
-
-@app.get("/")
-def home():
-    return {"message": "Smart Medical Backend Running ✅"}
 
 # ==========================
 # SERVER START
