@@ -3,12 +3,11 @@
 buildscript {
     
     repositories {
-        maven { url 'https://maven.google.com' }
         google()
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.5.0'
+        classpath 'com.android.tools.build:gradle:8.13.0'
         classpath 'com.google.gms:google-services:4.4.4'
 
         // NOTE: Do not place your application dependencies here; they belong
@@ -20,22 +19,8 @@ apply from: "variables.gradle"
 
 allprojects {
     repositories {
-        maven { url 'https://maven.google.com' }
         google()
         mavenCentral()
-    }
-}
-
-subprojects { subproject ->
-    afterEvaluate {
-        if (subproject.hasProperty("android")) {
-            subproject.android {
-                compileOptions {
-                    sourceCompatibility JavaVersion.VERSION_17
-                    targetCompatibility JavaVersion.VERSION_17
-                }
-            }
-        }
     }
 }
 

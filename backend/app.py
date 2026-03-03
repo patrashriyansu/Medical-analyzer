@@ -75,7 +75,7 @@ class AuthResponse(BaseModel):
 class PersonalizedPlanRequest(BaseModel):
     analysis: dict
     health_score: int
-    risk_flags: dict
+    risk_flags: dict | list | None = None
 
 class ChatRequest(BaseModel):
     message: str
@@ -94,6 +94,23 @@ class VoiceQueryRequest(BaseModel):
 
 class LocalizationRequest(BaseModel):
     language: str
+    analysis: dict
+    health_score: int
+
+class RiskLevelRequest(BaseModel):
+    analysis: dict
+    health_score: int
+    risk_flags: dict | list | None = None
+
+class ExplainReportRequest(BaseModel):
+    analysis: dict
+    health_score: int
+    explanation: str | None = None
+
+class FamilyProfileRequest(BaseModel):
+    user_email: str
+    family_member_name: str
+    relation: str
     analysis: dict
     health_score: int
 
@@ -312,6 +329,58 @@ def build_preventive_plan(analysis, health_score):
         baseline_plan["tests_to_repeat"] = ["CBC", "Ferritin", "Iron profile"]
     return baseline_plan
 
+def evaluate_risk_level(analysis, health_score):
+    risk_factors = []
+    for marker, data in (analysis or {}).items():
+        status = data.get("status")
+        if status == "High":
+            risk_factors.append(f"{marker} is elevated")
+        elif status == "Low":
+            risk_factors.append(f"{marker} is below normal")
+
+    if health_score <= 55:
+        return {
+            "risk_level": "CRITICAL",
+            "risk_factors": risk_factors,
+            "recommendation": "Seek clinical consultation urgently and repeat abnormal labs as advised.",
+        }
+    if health_score <= 75:
+        return {
+            "risk_level": "HIGH",
+            "risk_factors": risk_factors,
+            "recommendation": "Consult a doctor within 1 week and start corrective lifestyle actions immediately.",
+        }
+    if health_score <= 90:
+        return {
+            "risk_level": "MODERATE",
+            "risk_factors": risk_factors,
+            "recommendation": "Monitor biomarkers, maintain a structured routine, and recheck in 2-4 weeks.",
+        }
+    return {
+        "risk_level": "LOW",
+        "risk_factors": risk_factors,
+        "recommendation": "Continue healthy habits and keep periodic preventive checkups.",
+    }
+
+def build_trend_direction(scores):
+    if len(scores) <= 1:
+        return "Baseline"
+    if scores[-1] > scores[0]:
+        return "Improving"
+    if scores[-1] < scores[0]:
+        return "Declining"
+    return "Stable"
+
+def build_trend_prediction(scores):
+    if len(scores) < 2:
+        return "Insufficient data for 6-month projection. Save at least 2 reports."
+    delta = scores[-1] - scores[0]
+    if delta >= 10:
+        return "Projected trajectory is favorable over 6 months if current routine is maintained."
+    if delta <= -10:
+        return "Projected trajectory indicates decline. Early clinician follow-up is recommended."
+    return "Projected trajectory is stable. Small routine improvements can raise future scores."
+
 def build_quick_summary(analysis, score):
     if not analysis:
         return "No measurable lab values were extracted from this report. Please upload a clear PDF with standard test labels."
@@ -376,6 +445,10 @@ def personalized_plan(req: PersonalizedPlanRequest, user=Depends(get_current_use
     plan = build_preventive_plan(req.analysis or {}, req.health_score)
     return {"personalized_plan": plan}
 
+@app.post("/risk-level")
+def risk_level(req: RiskLevelRequest, user=Depends(get_current_user)):
+    return evaluate_risk_level(req.analysis or {}, req.health_score)
+
 @app.post("/chat-report")
 def chat_report(req: ChatRequest, user=Depends(get_current_user)):
     context = retriever.retrieve(req.message)
@@ -397,27 +470,68 @@ def voice_query(req: VoiceQueryRequest, user=Depends(get_current_user)):
     res = chat_report(ChatRequest(message=req.query, analysis=req.analysis, health_score=0), user)
     return {"response": res["response"]}
 
+@app.post("/voice-consultation")
+def voice_consultation(req: VoiceQueryRequest, user=Depends(get_current_user)):
+    return voice_query(req, user)
+
+@app.post("/explain-report")
+def explain_report(req: ExplainReportRequest, user=Depends(get_current_user)):
+    explanation = req.explanation or build_quick_summary(req.analysis or {}, req.health_score)
+    return {
+        "source": "Standard Analysis",
+        "explanation": explanation
+    }
+
 @app.post("/emergency-alert")
 def emergency_alert(req: ChatRequest, user=Depends(get_current_user)):
     alerts = {"critical": [], "warning": []}
     for test, data in req.analysis.items():
         if data["status"] == "High":
-            alerts["warning"].append({
+            target = "critical" if req.health_score <= 55 else "warning"
+            alerts[target].append({
                 "test": test,
-                "message": f"{test} is high. Consult doctor."
+                "message": f"{test} is high. Consult doctor.",
+                "action": "Book a consultation and repeat relevant biomarkers."
             })
+    alerts["notifications"] = {
+        "email": "Enabled",
+        "whatsapp": "Enabled",
+        "sms": "Enabled",
+    }
     return alerts
 
 @app.post("/family/save-profile")
-def save_family(req: SaveTrendRequest, user=Depends(get_current_user)):
-    if user not in family_profiles_db:
-        family_profiles_db[user] = []
-    family_profiles_db[user].append(req.dict())
+def save_family(req: FamilyProfileRequest, user=Depends(get_current_user)):
+    if req.user_email not in family_profiles_db:
+        family_profiles_db[req.user_email] = []
+    family_profiles_db[req.user_email].append(req.dict())
     return {"status": "Saved"}
 
 @app.get("/family/get-profiles/{email}")
 def get_family(email: str, user=Depends(get_current_user)):
-    return {"profiles": family_profiles_db.get(email, [])}
+    profiles = family_profiles_db.get(email, [])
+    if not profiles:
+        return {
+            "profiles": [],
+            "family_count": 0,
+            "genetic_prediction": "No linked family data yet. Add at least one member to run genetic risk simulation.",
+            "recommendation": "Start by adding immediate family profiles to improve prediction quality.",
+        }
+
+    avg_score = sum([p.get("health_score", 0) for p in profiles]) / len(profiles)
+    if avg_score < 60:
+        recommendation = "Family cohort shows higher aggregate risk. Prioritize preventive screening."
+    elif avg_score < 80:
+        recommendation = "Family cohort risk is moderate. Continue monitoring and preventive actions."
+    else:
+        recommendation = "Family cohort appears low-risk overall. Maintain healthy lifestyle."
+
+    return {
+        "profiles": profiles,
+        "family_count": len(profiles),
+        "genetic_prediction": f"Estimated hereditary risk profile based on {len(profiles)} family member record(s).",
+        "recommendation": recommendation,
+    }
 
 @app.post("/trends/save")
 def save_trend(req: SaveTrendRequest, user=Depends(get_current_user)):
@@ -430,10 +544,18 @@ def save_trend(req: SaveTrendRequest, user=Depends(get_current_user)):
 def get_trends(email: str, user=Depends(get_current_user)):
     trends = health_trends_db.get(email, [])
     scores = [t["health_score"] for t in trends]
+    trend_direction = build_trend_direction(scores)
     return {
         "trends": trends,
         "average_score": sum(scores)/len(scores) if scores else 0,
-        "latest_score": scores[-1] if scores else 0
+        "latest_score": scores[-1] if scores else 0,
+        "trend_analysis": trend_direction,
+        "trend_direction": trend_direction,
+        "prediction": build_trend_prediction(scores),
+        "chart_data": {
+            "labels": [t["date"] for t in trends],
+            "scores": scores,
+        } if trends else None
     }
 
 @app.post("/localize")
