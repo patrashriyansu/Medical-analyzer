@@ -23,7 +23,7 @@ function App() {
   const isCapacitorApp = !!window?.Capacitor;
   const API_BASE = localStorage.getItem("backend_url")
     || process.env.REACT_APP_API_BASE_URL
-    || (isCapacitorApp ? "https://looking-bucks-committed-peninsula.trycloudflare.com" : "http://127.0.0.1:8000");
+    || (isCapacitorApp ? "http://10.160.32.120:8000" : "http://127.0.0.1:8000");
   const [user, setUser] = useState(null);
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
