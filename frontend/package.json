@@ -27,7 +27,8 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "start:prod": "serve -s build -l $PORT",
+    "start:prod": "serve -s build -l 8080",
+    "migrate": "echo no-migrations",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
