@@ -4,7 +4,7 @@ import "./Auth.css";
 function Login({ onLoginSuccess }) {
   const isCapacitorApp = !!window?.Capacitor;
   const isLocalWeb = ["localhost", "127.0.0.1"].includes(window.location.hostname);
-  const publicApiBase = "https://medical-analyzer-xrjb.onrender.com";
+  const publicApiBase = "https://medical-analyzer-production-7dc4.up.railway.app";
   const defaultApiBase = process.env.REACT_APP_API_BASE_URL
     || (isLocalWeb ? localStorage.getItem("backend_url") : null)
     || (isCapacitorApp ? "http://10.0.2.2:8000" : (isLocalWeb ? "http://127.0.0.1:8000" : publicApiBase));
